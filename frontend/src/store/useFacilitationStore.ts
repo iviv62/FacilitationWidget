@@ -1,18 +1,39 @@
 import { create } from 'zustand';
-import axios from 'axios';
-
-// Import the type from our API
-import type { FacilitationData } from '@/app/api/facilitation/route';
 
 interface FacilitationStore {
   data: FacilitationData | null;
   loading: boolean;
   error: string | null;
-  activeIcon: 'mood' | 'relevancy' | 'elaborateness' | 'blindspot' | 'uniqueIdeas';
-  fetchData: () => Promise<void>;
-  setActiveIcon: (icon: 'mood' | 'relevancy' | 'elaborateness' | 'blindspot' | 'uniqueIdeas') => void;
-  cycleMood: () => void;
+  activeIcon: 'mood' | 'relevancy' | 'elaborateness' ;
+  setActiveIcon: (icon: 'mood' | 'relevancy' | 'elaborateness' ) => void;
+  connectWebSocket: () => void;
 }
+
+export interface FacilitationData {
+  iconData: {
+    mood: { 
+      value: number; 
+      mood: 'negative' | 'neutral' | 'positive';
+      keyIndicators: string[];
+      facilitation: string;
+      action: string;
+      iceBreakerJoke: string | null;
+    };
+    relevancy: { 
+      value: number; 
+      facilitation: string;
+      action: string;
+    };
+    elaborateness: { 
+      value: number; 
+      facilitation: string;
+      action: string;
+    };
+  };
+
+}
+
+let ws: WebSocket | null = null; // Use native WebSocket
 
 export const useFacilitationStore = create<FacilitationStore>((set, get) => ({
   data: null,
@@ -20,52 +41,60 @@ export const useFacilitationStore = create<FacilitationStore>((set, get) => ({
   error: null,
   activeIcon: 'mood',
   
-  fetchData: async () => {
-    set({ loading: true, error: null });
-    try {
-      const response = await axios.get('/api/facilitation');
-      set({ data: response.data, loading: false });
-    } catch (error) {
-      console.error('Error fetching facilitation data:', error);
-      set({ error: 'Failed to fetch data', loading: false });
-    }
-  },
-  
   setActiveIcon: (icon) => {
     set({ activeIcon: icon });
   },
-  
-  cycleMood: () => {
-    const { data } = get();
-    if (!data) return;
-    
-    let newMood: 'negative' | 'neutral' | 'positive';
-    let newMoodValue: number;
-    
-    if (data.mood === 'negative') {
-      newMood = 'neutral';
-      newMoodValue = 5;
-    } else if (data.mood === 'neutral') {
-      newMood = 'positive';
-      newMoodValue = 8;
-    } else {
-      newMood = 'negative';
-      newMoodValue = 2;
-    }
-    
-    // Update state locally without making an API request
-    set({
-      data: {
-        ...data,
-        mood: newMood,
-        iconData: {
-          ...data.iconData,
-          mood: {
-            ...data.iconData.mood,
-            value: newMoodValue
-          }
-        }
+
+  connectWebSocket: () => {
+    if (ws) return; // Prevent multiple connections
+    ws = new WebSocket('ws://127.0.0.4:8008/api/v1/insights/ws/sentiment_insight');
+
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        console.log('WebSocket message received:', event.data);
+        const msg = JSON.parse(event.data);
+
+        // Transform the incoming message to match FacilitationData structure
+        const newData: FacilitationData = {
+          iconData: {
+            mood: { 
+              value: msg.primary_sentiment_score ?? 5, 
+              mood: msg.primary_sentiment_score >= 7 ? 'positive' : msg.primary_sentiment_score >= 4 ? 'neutral' : 'negative',
+              keyIndicators: msg.key_indicators,
+              facilitation: msg.impact_assessment,
+              action: msg.facilitator_action,
+              iceBreakerJoke: msg.ice_breaker_joke,
+            },
+            relevancy: { 
+              value: 5, 
+              facilitation: msg.relevancy_do ?? 'Default relevancy do',
+              action: msg.relevancy_say ?? 'Default relevancy say' 
+            },
+            elaborateness: { 
+              value: 5, 
+              facilitation: msg.elaborateness_do ?? 'Default elaborateness do',
+              action: msg.elaborateness_say ?? 'Default elaborateness say' 
+            }
+          },
+        };
+
+        set({ data: newData });
+      } catch (err) {
+        console.error('Error parsing WebSocket message:', err);
       }
-    });
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket disconnected');
+      ws = null;
+    };
+
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err);
+    };
   }
-})); 
+}));
